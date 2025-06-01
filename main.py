@@ -41,6 +41,10 @@ layout_spec = {
     'm': (1, 1), ',': (2, 1), '.': (3, 1), '/': (4, 1),
 }
 
+expected_fingers = {
+    'a': 'Left Pinky', 's': 'Left Ring', 'd': 'Left Middle', 'f': 'Left Index',
+    'j': 'Right Index', 'k': 'Right Middle', 'l': 'Right Ring', ';': 'Right Pinky'
+}
 
 test_text = "hello world"
 typed_text = ""
@@ -58,6 +62,12 @@ def log(msg):
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 hands = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.7, min_tracking_confidence=0.7)
+
+# Get webcam dimensions once at startup
+cap = cv2.VideoCapture(0)
+SCREEN_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+SCREEN_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+cap.release()
 
 # ---- Webcam Thread ----
 def hand_tracking():
@@ -116,14 +126,40 @@ def hand_tracking():
 
         cv2.imshow("Typing Coach - Hand Tracking", frame)
 
-        # ---- Hand Landmarks ----
-        
+    # ---- Hand Landmarks ----
+        # Draw origin and axes if layout is projected
+        if not calibrating and 'f' in calibrated_keys:
+            origin = calibrated_keys['f']['position']
+            x_axis = normalize(subtract(origin, calibrated_keys['a']['position']))
+            y_axis = rotate90(x_axis)
+
+            scale = 100  # adjust length of axis arrows
+
+            x_end = (int(origin[0] + x_axis[0] * scale), int(origin[1] + x_axis[1] * scale))
+            y_end = (int(origin[0] + y_axis[0] * scale), int(origin[1] + y_axis[1] * scale))
+
+            # Origin dot
+            cv2.circle(frame, origin, 5, (0, 0, 255), -1)  # red dot
+
+            # X-axis (Red)
+            cv2.arrowedLine(frame, origin, x_end, (0, 0, 255), 2, tipLength=0.3)
+
+            # Y-axis (Blue)
+            cv2.arrowedLine(frame, origin, y_end, (255, 0, 0), 2, tipLength=0.3)
+
+            # Optional: draw all key points
+            for key, pos in key_pixel_map.items():
+                cv2.circle(frame, pos, 3, (0, 255, 0), -1)  # green dots
+                cv2.putText(frame, key, (pos[0] + 5, pos[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
 
         # ---- Stop Process ----
         if cv2.waitKey(1) & 0xFF == ord('q'):
             log("Q pressed in webcam window.")
             stop_threads = True
             break
+
+        
 
     cap.release()
     cv2.destroyAllWindows()
@@ -133,7 +169,6 @@ def hand_tracking():
 def on_press(key):
     global stop_threads, typed_text, current_index, finger_history 
     global calibrating, calibrated_keys, current_cal_key_index
-
 
     try:
         char = key.char.lower()
@@ -158,14 +193,26 @@ def on_press(key):
                 best_match = None
                 min_distance = float('inf')
 
+                # Get screen center using global dimensions
+                screen_center = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+
+                # Get expected finger for this key
+                expected_finger = expected_fingers.get(expected_key)
+                if expected_finger:
+                    expected_hand, expected_finger_name = expected_finger.split()
+
                 for hand in closest_snapshot["hands"]:
                     hand_label = hand["hand"]
-                    for finger_name, pos in hand["fingers"].items():
-                        # Use simple vertical distance from screen center (or could use fixed Y target)
-                        dx = pos[0]
-                        dy = pos[1]
-                        dist = abs(dy)  # You could also compare to previous key position if you'd like
+                    # Only consider the correct hand
+                    if hand_label != expected_hand:
+                        continue
 
+                    # Only consider the correct finger
+                    finger_name = expected_finger_name.split()[-1]
+                    if finger_name in hand["fingers"]:
+                        pos = hand["fingers"][finger_name]
+                        dist = euclidean_distance(pos, screen_center)
+                        
                         if dist < min_distance:
                             min_distance = dist
                             best_match = {
@@ -183,7 +230,7 @@ def on_press(key):
                         log("✅ Calibration complete. Begin typing test.")
                         calibrating = False
 
-                         # 🔽 ADD THIS: project full layout
+                        # Project full layout
                         global key_pixel_map  # make it accessible in other functions
                         key_pixel_map = build_key_layout(calibrated_keys, layout_spec)
                         log("🧭 Full layout projected.")
@@ -193,9 +240,6 @@ def on_press(key):
         else:
             log(f"Waiting for '{expected_key}' (not '{char}')")
         return
-
-
-        
 
 
     try:
@@ -213,12 +257,22 @@ def on_press(key):
             # Try to find the closest finger data frame
             if finger_history:
                 closest_snapshot = min(finger_history, key=lambda s: abs(s["timestamp"] - keypress_time))
-                log(f"Closest finger snapshot at {closest_snapshot['timestamp']:.2f} for key '{char}'")
-
-                for hand in closest_snapshot["hands"]:
-                    hand_label = hand["hand"]
-                    for finger_name, pos in hand["fingers"].items():
-                        log(f"{hand_label} {finger_name} at {pos}")
+                
+                # Find the closest finger to the key position if we have the layout
+                if char in key_pixel_map:
+                    target_pos = key_pixel_map[char]
+                    min_dist = float('inf')
+                    closest_finger = None
+                    
+                    for hand in closest_snapshot["hands"]:
+                        for finger_name, pos in hand["fingers"].items():
+                            dist = euclidean_distance(pos, target_pos)
+                            if dist < min_dist:
+                                min_dist = dist
+                                closest_finger = f"{hand['hand']} {finger_name}"
+                    
+                    if closest_finger:
+                        log(f"Closest finger to key '{char}': {closest_finger}")
 
             typed_text += char
             current_index += 1
@@ -235,13 +289,33 @@ def on_press(key):
             return False
         log(f"Special key pressed: {key}")
 
+# ---- Finger Validation ----
+    if char in expected_fingers:
+        expected = expected_fingers[char]
+        expected_hand, expected_finger_name = expected.split()
+        finger_name = expected_finger_name.split()[-1]  # Get just the finger name (e.g. "Pinky" from "Left Pinky")
+        
+        # Find closest finger (already done)
+        closest_snapshot = min(finger_history, key=lambda s: abs(s["timestamp"] - keypress_time))
+
+        used_finger = None
+        for hand in closest_snapshot["hands"]:
+            if hand["hand"] == expected_hand and finger_name in hand["fingers"]:
+                used_finger = f"{hand['hand']} {finger_name}"
+                break
+
+        if used_finger == expected:
+            log(f"🟢 Correct finger: {used_finger}")
+        else:
+            log(f"🔴 Wrong finger! Used {used_finger if used_finger else 'unknown finger'}, expected {expected}")
+   
+
 def key_logger():
     
     log("Keylogger thread starting.")
     with keyboard.Listener(on_press=on_press) as listener:
         listener.join()
     log("Keylogger thread exiting.")
-
 
 def build_key_layout(calibrated_keys, layout_spec):
     """
@@ -270,6 +344,9 @@ def build_key_layout(calibrated_keys, layout_spec):
 
     return key_pixel_map
 
+def euclidean_distance(p1, p2):
+    """Calculate Euclidean distance between two points."""
+    return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
 # ---- Main Entry ----
 if __name__ == "__main__":
