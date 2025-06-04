@@ -10,7 +10,7 @@ import math
 import pytesseract
 import numpy as np
 import os
-from keyboard_ocr import detect_keys
+from keyboard_ocr import detect_keyboard
 
 
 # Configure Tesseract path
@@ -28,66 +28,6 @@ calibration_keys = ['a', 's', 'd', 'f', 'j', 'k', 'l', ';']
 current_cal_key_index = 0
 calibrating = True
 
-def detect_keyboard(frame):
-    """
-    Detect keyboard keys in the frame and return their positions.
-    Returns a dictionary mapping characters to their pixel positions.
-    """
-    # Convert to grayscale
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    # Apply adaptive thresholding
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-    
-    # Denoise
-    denoised = cv2.fastNlMeansDenoising(thresh)
-    
-    # Dilate to connect components
-    kernel = np.ones((3,3), np.uint8)
-    dilated = cv2.dilate(denoised, kernel, iterations=1)
-    
-    # Find contours
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Sort contours by area and keep only the larger ones (likely to be keys)
-    min_area = 100  # minimum area for a key
-    contours = [c for c in contours if cv2.contourArea(c) > min_area]
-    
-    layout = {}
-    
-    # Configure Tesseract for single character recognition
-    custom_config = r'--oem 3 --psm 10'  # PSM 10 = Treat image as single character
-    
-    # Process each contour
-    for contour in contours:
-        # Get bounding box
-        x, y, w, h = cv2.boundingRect(contour)
-        
-        # Extract the potential key region
-        key_region = frame[y:y+h, x:x+w]
-        
-        # Make it larger for better OCR
-        key_region = cv2.resize(key_region, (w*4, h*4))
-        
-        try:
-            # Get OCR result
-            text = pytesseract.image_to_string(key_region, config=custom_config).strip().lower()
-            
-            # Only accept single characters that are alphanumeric
-            if len(text) == 1 and (text.isalnum() or text in [',', '.', ';', '/']):
-                # Store center position
-                center_x = x + w//2
-                center_y = y + h//2
-                layout[text] = (center_x, center_y)
-                
-                # Draw for visualization
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                cv2.putText(frame, text, (center_x, center_y), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        except Exception as e:
-            continue
-            
-    return layout
 
 # calibrate maths 
 def normalize(v):
