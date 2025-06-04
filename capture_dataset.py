@@ -1,21 +1,34 @@
 import cv2
 import os
 
+# Where to save images
 save_dir = 'dataset/images/train'
 os.makedirs(save_dir, exist_ok=True)
-
-cap = cv2.VideoCapture(0)
 count = len(os.listdir(save_dir))
 
+# Start webcam
+cap = cv2.VideoCapture(0)
 print("[INFO] Press 'S' to save frame | Press 'Q' to quit.")
 
-while True:
+while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
+        print("Failed to capture frame.")
         break
 
     frame = cv2.flip(frame, 1)
-    cv2.imshow("Capture Dataset", frame)
+
+    # Instructions
+    cv2.putText(frame, f"Images saved: {count} | Press 'S' to save, 'Q' to quit",
+                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    # Show window
+    try:
+        cv2.imshow("Keyboard Dataset Capture", frame)
+    except cv2.error as e:
+        print("cv2.imshow() failed — likely missing GUI support in this session.")
+        print(e)
+        break
 
     key = cv2.waitKey(1) & 0xFF
     if key == ord('s'):
