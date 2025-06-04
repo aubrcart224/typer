@@ -7,14 +7,87 @@ import time
 import tkinter as tk
 from collections import deque 
 import math
+import pytesseract
+import numpy as np
+import os
+from keyboard_ocr import detect_keys
+
+
+# Configure Tesseract path
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 stop_threads = False
+
+# Keyboard detection state
+keyboard_detected = False
+detected_layout = {}
 
 # Calibration state
 calibrated_keys = {}
 calibration_keys = ['a', 's', 'd', 'f', 'j', 'k', 'l', ';']
 current_cal_key_index = 0
 calibrating = True
+
+def detect_keyboard(frame):
+    """
+    Detect keyboard keys in the frame and return their positions.
+    Returns a dictionary mapping characters to their pixel positions.
+    """
+    # Convert to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Apply adaptive thresholding
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+    
+    # Denoise
+    denoised = cv2.fastNlMeansDenoising(thresh)
+    
+    # Dilate to connect components
+    kernel = np.ones((3,3), np.uint8)
+    dilated = cv2.dilate(denoised, kernel, iterations=1)
+    
+    # Find contours
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Sort contours by area and keep only the larger ones (likely to be keys)
+    min_area = 100  # minimum area for a key
+    contours = [c for c in contours if cv2.contourArea(c) > min_area]
+    
+    layout = {}
+    
+    # Configure Tesseract for single character recognition
+    custom_config = r'--oem 3 --psm 10'  # PSM 10 = Treat image as single character
+    
+    # Process each contour
+    for contour in contours:
+        # Get bounding box
+        x, y, w, h = cv2.boundingRect(contour)
+        
+        # Extract the potential key region
+        key_region = frame[y:y+h, x:x+w]
+        
+        # Make it larger for better OCR
+        key_region = cv2.resize(key_region, (w*4, h*4))
+        
+        try:
+            # Get OCR result
+            text = pytesseract.image_to_string(key_region, config=custom_config).strip().lower()
+            
+            # Only accept single characters that are alphanumeric
+            if len(text) == 1 and (text.isalnum() or text in [',', '.', ';', '/']):
+                # Store center position
+                center_x = x + w//2
+                center_y = y + h//2
+                layout[text] = (center_x, center_y)
+                
+                # Draw for visualization
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                cv2.putText(frame, text, (center_x, center_y), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        except Exception as e:
+            continue
+            
+    return layout
 
 # calibrate maths 
 def normalize(v):
@@ -26,24 +99,6 @@ def subtract(p1, p2):
 
 def rotate90(v):
     return (-v[1], v[0])
-
-layout_spec = {
-    # Left half
-    # Top row
-    'q': (-2.5, -1), 'w': (-1.5, -1), 'e': (-0.5, -1), 'r': (0.5, -1), 't': (1.5, -1),
-    # Home row
-    'a': (-2.5, 0), 's': (-1.5, 0), 'd': (-0.5, 0), 'f': (0.5, 0), 'g': (1.5, 0),
-    # Bottom row
-    'z': (-2.5, 1), 'x': (-1.5, 1), 'c': (-0.5, 1), 'v': (0.5, 1), 'b': (1.5, 1),
-
-    # Right half (notice the gap between halves)
-    # Top row
-    'y': (3.5, -1), 'u': (4.5, -1), 'i': (5.5, -1), 'o': (6.5, -1), 'p': (7.5, -1),
-    # Home row
-    'h': (3.5, 0), 'j': (4.5, 0), 'k': (5.5, 0), 'l': (6.5, 0), ';': (7.5, 0),
-    # Bottom row
-    'n': (3.5, 1), 'm': (4.5, 1), ',': (5.5, 1), '.': (6.5, 1), '/': (7.5, 1),
-}
 
 expected_fingers = {
     # Left hand home row
@@ -77,11 +132,38 @@ cap.release()
 
 # ---- Webcam Thread ----
 def hand_tracking():
-
-    global stop_threads, finger_history
+    global stop_threads, finger_history, keyboard_detected, detected_layout
 
     log("Webcam thread starting.")
     cap = cv2.VideoCapture(0)
+
+    # Initial keyboard detection phase
+    while not keyboard_detected and not stop_threads:
+        success, frame = cap.read()
+        if not success:
+            log("Camera frame read failed.")
+            break
+
+        frame = cv2.flip(frame, 1)
+        
+        # Display instructions
+        cv2.putText(frame, "Please show your keyboard clearly to the camera", 
+                   (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        # Try to detect keyboard
+        layout = detect_keyboard(frame)
+        
+        # If we found enough keys, consider it a successful detection
+        if len(layout) >= 20:  # Require at least 20 keys to be detected
+            detected_layout = layout
+            keyboard_detected = True
+            log(f"✅ Keyboard layout detected with {len(layout)} keys")
+            break
+            
+        cv2.imshow("Typing Coach - Keyboard Detection", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            stop_threads = True
+            break
 
     while cap.isOpened() and not stop_threads:
         success, frame = cap.read()
@@ -130,42 +212,19 @@ def hand_tracking():
                 "hands": frame_data
             })
 
+        # Draw detected keyboard layout
+        if keyboard_detected:
+            for char, pos in detected_layout.items():
+                cv2.circle(frame, pos, 3, (0, 255, 0), -1)  # green dots
+                cv2.putText(frame, char, (pos[0] + 5, pos[1] - 5), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
         cv2.imshow("Typing Coach - Hand Tracking", frame)
 
-    # ---- Hand Landmarks ----
-        # Draw origin and axes if layout is projected
-        if not calibrating and 'f' in calibrated_keys:
-            origin = calibrated_keys['f']['position']
-            x_axis = normalize(subtract(origin, calibrated_keys['a']['position']))
-            y_axis = rotate90(x_axis)
-
-            scale = 100  # adjust length of axis arrows
-
-            x_end = (int(origin[0] + x_axis[0] * scale), int(origin[1] + x_axis[1] * scale))
-            y_end = (int(origin[0] + y_axis[0] * scale), int(origin[1] + y_axis[1] * scale))
-
-            # Origin dot
-            cv2.circle(frame, origin, 5, (0, 0, 255), -1)  # red dot
-
-            # X-axis (Red)
-            cv2.arrowedLine(frame, origin, x_end, (0, 0, 255), 2, tipLength=0.3)
-
-            # Y-axis (Blue)
-            cv2.arrowedLine(frame, origin, y_end, (255, 0, 0), 2, tipLength=0.3)
-
-            # Optional: draw all key points
-            for key, pos in key_pixel_map.items():
-                cv2.circle(frame, pos, 3, (0, 255, 0), -1)  # green dots
-                cv2.putText(frame, key, (pos[0] + 5, pos[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-
-
-        # ---- Stop Process ----
         if cv2.waitKey(1) & 0xFF == ord('q'):
             log("Q pressed in webcam window.")
             stop_threads = True
             break
-
-        
 
     cap.release()
     cv2.destroyAllWindows()
@@ -238,7 +297,7 @@ def on_press(key):
 
                         # Project full layout
                         global key_pixel_map  # make it accessible in other functions
-                        key_pixel_map = build_key_layout(calibrated_keys, layout_spec)
+                        key_pixel_map = build_key_layout(calibrated_keys, _)
                         log("🧭 Full layout projected.")
                     
                 else:
@@ -327,32 +386,19 @@ def key_logger():
         listener.join()
     log("Keylogger thread exiting.")
 
-def build_key_layout(calibrated_keys, layout_spec):
+def build_key_layout(calibrated_keys, _):
     """
-    Takes in the calibrated keys (home row positions) and a logical keyboard layout
-    Returns a dict mapping key → projected pixel position
+    Takes in the calibrated keys and returns a dict mapping key → pixel position.
+    Now uses the detected layout instead of a static layout spec.
     """
-
-    # Use 'f' as the origin (or whatever is most central)
-    origin_key = 'f'
-    origin_data = calibrated_keys[origin_key]
-    origin = origin_data['position']
-
-    # Use direction from 'a' to 'f' to define x-axis
-    x_axis = normalize(subtract(origin, calibrated_keys['a']['position']))
-    y_axis = rotate90(x_axis)  # 90° rotation for vertical axis
-
-    log(f"📐 x_axis: {x_axis}, y_axis: {y_axis}")
-
-    key_pixel_map = {}
-
-    for key, (dx, dy) in layout_spec.items():
-        # Project: origin + dx * x_axis + dy * y_axis
-        px = origin[0] + dx * x_axis[0] * 40 + dy * y_axis[0] * 40
-        py = origin[1] + dx * x_axis[1] * 40 + dy * y_axis[1] * 40
-        key_pixel_map[key] = (int(px), int(py))
-
-    return key_pixel_map
+    global detected_layout
+    
+    if not keyboard_detected or not detected_layout:
+        log("❌ No keyboard layout detected!")
+        return {}
+        
+    # Use the detected layout directly
+    return detected_layout
 
 def euclidean_distance(p1, p2):
     """Calculate Euclidean distance between two points."""
