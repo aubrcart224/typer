@@ -28,22 +28,28 @@ def rotate90(v):
     return (-v[1], v[0])
 
 layout_spec = {
-    # Home row
-    'a': (-3, 0), 's': (-2, 0), 'd': (-1, 0), 'f': (0, 0),
-    'j': (1, 0), 'k': (2, 0), 'l': (3, 0), ';': (4, 0),
-
+    # Left half
     # Top row
-    'q': (-3, -1), 'w': (-2, -1), 'e': (-1, -1), 'r': (0, -1),
-    'u': (1, -1), 'i': (2, -1), 'o': (3, -1), 'p': (4, -1),
-
+    'q': (-2.5, -1), 'w': (-1.5, -1), 'e': (-0.5, -1), 'r': (0.5, -1), 't': (1.5, -1),
+    # Home row
+    'a': (-2.5, 0), 's': (-1.5, 0), 'd': (-0.5, 0), 'f': (0.5, 0), 'g': (1.5, 0),
     # Bottom row
-    'z': (-3, 1), 'x': (-2, 1), 'c': (-1, 1), 'v': (0, 1),
-    'm': (1, 1), ',': (2, 1), '.': (3, 1), '/': (4, 1),
+    'z': (-2.5, 1), 'x': (-1.5, 1), 'c': (-0.5, 1), 'v': (0.5, 1), 'b': (1.5, 1),
+
+    # Right half (notice the gap between halves)
+    # Top row
+    'y': (3.5, -1), 'u': (4.5, -1), 'i': (5.5, -1), 'o': (6.5, -1), 'p': (7.5, -1),
+    # Home row
+    'h': (3.5, 0), 'j': (4.5, 0), 'k': (5.5, 0), 'l': (6.5, 0), ';': (7.5, 0),
+    # Bottom row
+    'n': (3.5, 1), 'm': (4.5, 1), ',': (5.5, 1), '.': (6.5, 1), '/': (7.5, 1),
 }
 
 expected_fingers = {
-    'a': 'Left Pinky', 's': 'Left Ring', 'd': 'Left Middle', 'f': 'Left Index',
-    'j': 'Right Index', 'k': 'Right Middle', 'l': 'Right Ring', ';': 'Right Pinky'
+    # Left hand home row
+    'a': 'Left Pinky', 's': 'Left Ring', 'd': 'Left Middle', 'f': 'Left Index', 'g': 'Left Index',
+    # Right hand home row
+    'h': 'Right Index', 'j': 'Right Index', 'k': 'Right Middle', 'l': 'Right Ring', ';': 'Right Pinky'
 }
 
 test_text = "hello world"
@@ -255,24 +261,40 @@ def on_press(key):
             log(f"Typed: '{char}' | Expected: '{expected}' | {'✅' if correct else '❌'}")
 
             # Try to find the closest finger data frame
-            if finger_history:
+            if finger_history and char in key_pixel_map:
                 closest_snapshot = min(finger_history, key=lambda s: abs(s["timestamp"] - keypress_time))
+                target_pos = key_pixel_map[char]
                 
-                # Find the closest finger to the key position if we have the layout
-                if char in key_pixel_map:
-                    target_pos = key_pixel_map[char]
-                    min_dist = float('inf')
-                    closest_finger = None
-                    
-                    for hand in closest_snapshot["hands"]:
-                        for finger_name, pos in hand["fingers"].items():
-                            dist = euclidean_distance(pos, target_pos)
-                            if dist < min_dist:
-                                min_dist = dist
-                                closest_finger = f"{hand['hand']} {finger_name}"
-                    
-                    if closest_finger:
-                        log(f"Closest finger to key '{char}': {closest_finger}")
+                # Initialize tracking variables
+                min_dist = float('inf')
+                closest_finger = None
+                
+                # Get expected hand and finger if available
+                expected_hand = None
+                expected_finger = None
+                if char in expected_fingers:
+                    expected_hand, expected_finger = expected_fingers[char].split()
+                
+                for hand in closest_snapshot["hands"]:
+                    for finger_name, pos in hand["fingers"].items():
+                        # Skip thumb for regular keys
+                        if finger_name == "Thumb":
+                            continue
+                            
+                        dist = euclidean_distance(pos, target_pos)
+                        
+                        # Apply weight to expected finger
+                        if (expected_hand and expected_finger and 
+                            hand["hand"] == expected_hand and 
+                            finger_name == expected_finger.split()[-1]):
+                            dist *= 0.7  # Give 30% bonus to expected finger
+                            
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_finger = f"{hand['hand']} {finger_name}"
+                
+                if closest_finger:
+                    log(f"Closest finger to key '{char}': {closest_finger}")
 
             typed_text += char
             current_index += 1
@@ -292,22 +314,10 @@ def on_press(key):
 # ---- Finger Validation ----
     if char in expected_fingers:
         expected = expected_fingers[char]
-        expected_hand, expected_finger_name = expected.split()
-        finger_name = expected_finger_name.split()[-1]  # Get just the finger name (e.g. "Pinky" from "Left Pinky")
-        
-        # Find closest finger (already done)
-        closest_snapshot = min(finger_history, key=lambda s: abs(s["timestamp"] - keypress_time))
-
-        used_finger = None
-        for hand in closest_snapshot["hands"]:
-            if hand["hand"] == expected_hand and finger_name in hand["fingers"]:
-                used_finger = f"{hand['hand']} {finger_name}"
-                break
-
-        if used_finger == expected:
-            log(f"🟢 Correct finger: {used_finger}")
+        if closest_finger == expected:
+            log(f"🟢 Correct finger: {closest_finger}")
         else:
-            log(f"🔴 Wrong finger! Used {used_finger if used_finger else 'unknown finger'}, expected {expected}")
+            log(f"🔴 Wrong finger! Used {closest_finger if closest_finger else 'unknown finger'}, expected {expected}")
    
 
 def key_logger():
