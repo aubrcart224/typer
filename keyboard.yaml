@@ -1,0 +1,7 @@
+# keyboard.yaml
+path: dataset
+train: images/train
+val: images/train # using train set as val for now
+
+nc: 1
+names: ["key"]
