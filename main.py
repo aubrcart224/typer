@@ -237,7 +237,7 @@ def on_press(key):
 
                         # Project full layout
                         global key_pixel_map  # make it accessible in other functions
-                        key_pixel_map = build_key_layout(calibrated_keys, _)
+                        key_pixel_map = build_key_layout(calibrated_keys)
                         log("🧭 Full layout projected.")
                     
                 else:
@@ -326,7 +326,7 @@ def key_logger():
         listener.join()
     log("Keylogger thread exiting.")
 
-def build_key_layout(calibrated_keys, _):
+def build_key_layout(calibrated_keys):
     """
     Takes in the calibrated keys and returns a dict mapping key → pixel position.
     Now uses the detected layout instead of a static layout spec.
