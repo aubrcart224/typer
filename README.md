@@ -2,6 +2,8 @@
 
 A Python-based typing utility that helps monitor and log keyboard input.
 
+its good 
+
 ## Setup
 
 1. Create a virtual environment:
